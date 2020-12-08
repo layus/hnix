@@ -26,7 +26,12 @@
 --   original. It should be seen as an opportunistic simplifier, but which
 --   gives up easily if faced with any potential for ambiguity in the result.
 
-module Nix.Reduce (reduceExpr, reducingEvalExpr) where
+module Nix.Reduce
+  ( reduceExpr
+  , reducingEvalExpr
+  , pathToDefaultNixFile
+  , ReducerState(..)
+  ) where
 
 import           Control.Applicative
 import           Control.Arrow                  ( second )
@@ -52,7 +57,6 @@ import           Data.Maybe                     ( fromMaybe
                                                 )
 import           Data.Text                      ( Text )
 import           Nix.Atoms
-import           Nix.Effects.Basic              ( pathToDefaultNixFile )
 import           Nix.Expr
 import           Nix.Frames
 import           Nix.Options                    ( Options
@@ -60,18 +64,31 @@ import           Nix.Options                    ( Options
                                                 , reduceLists
                                                 )
 import           Nix.Parser
+import           Nix.Render                     ( MonadFile, doesDirectoryExist, canonicalizePath )
 import           Nix.Scope
 import           Nix.Utils
-import           System.Directory
 import           System.FilePath
+
+type DrvHashCache = MS.HashMap Text Text
+type ParseCache   = HashMap FilePath NExprLoc
+data ReducerState = ReducerState
+    { drvHashes :: !DrvHashCache
+    , exprs     :: !ParseCache
+    }
 
 newtype Reducer m a = Reducer
     { runReducer :: ReaderT (Maybe FilePath, Scopes (Reducer m) NExprLoc)
-                           (StateT (HashMap FilePath NExprLoc, MS.HashMap Text Text) m) a }
+                           (StateT ReducerState m) a }
     deriving (Functor, Applicative, Alternative, Monad, MonadPlus,
               MonadFix, MonadIO, MonadFail,
               MonadReader (Maybe FilePath, Scopes (Reducer m) NExprLoc),
-              MonadState (HashMap FilePath NExprLoc, MS.HashMap Text Text))
+              MonadState ReducerState)
+
+-- Given a path, determine the nix file to load
+pathToDefaultNixFile :: MonadFile m => FilePath -> m FilePath
+pathToDefaultNixFile p = do
+  isDir <- doesDirectoryExist p
+  pure $ if isDir then p </> "default.nix" else p
 
 staticImport
   :: forall m
@@ -79,7 +96,7 @@ staticImport
      , Scoped NExprLoc m
      , MonadFail m
      , MonadReader (Maybe FilePath, Scopes m NExprLoc) m
-     , MonadState (HashMap FilePath NExprLoc, HashMap Text Text) m
+     , MonadState ReducerState m
      )
   => SrcSpan
   -> FilePath
@@ -90,13 +107,14 @@ staticImport pann path = do
   path' <- liftIO $ pathToDefaultNixFile =<< canonicalizePath
     (maybe path (\p -> takeDirectory p </> path) mfile)
 
-  imports <- gets fst
+  imports <- gets exprs
   case M.lookup path' imports of
     Just expr -> pure expr
     Nothing   -> go path'
  where
+  go :: FilePath -> m NExprLoc
   go path = do
-    liftIO $ putStrLn $ "Importing file " ++ path
+    traceM $ "Importing file " ++ path
 
     eres <- liftIO $ parseNixFileLoc path
     case eres of
@@ -109,10 +127,10 @@ staticImport pann path = do
                           (Fix (NLiteralPath_ pann path))
                           pos
           x' = Fix (NLet_ span [cur] x)
-        modify (\(a, b) -> (M.insert path x' a, b))
+        modify (\rs -> rs {exprs = M.insert path x' (exprs rs)})
         local (const (Just path, emptyScopes @m @NExprLoc)) $ do
           x'' <- foldFix reduce x'
-          modify (\(a, b) -> (M.insert path x'' a, b))
+          modify (\rs -> rs {exprs = M.insert path x'' (exprs rs)})
           return x''
 
 -- gatherNames :: NExprLoc -> HashSet VarName
@@ -121,9 +139,9 @@ staticImport pann path = do
 --     Compose (Ann _ x) -> fold x
 
 reduceExpr
-  :: (MonadIO m, MonadFail m) => Maybe FilePath -> NExprLoc -> m NExprLoc
+  :: (MonadIO m, MonadFile m, MonadFail m) => Maybe FilePath -> NExprLoc -> m NExprLoc
 reduceExpr mpath expr =
-  (`evalStateT` (M.empty, MS.empty))
+  (`evalStateT` (ReducerState M.empty MS.empty))
     . (`runReaderT` (mpath, emptyScopes))
     . runReducer
     $ foldFix reduce expr
@@ -134,7 +152,7 @@ reduce
      , Scoped NExprLoc m
      , MonadFail m
      , MonadReader (Maybe FilePath, Scopes m NExprLoc) m
-     , MonadState (HashMap FilePath NExprLoc, MS.HashMap Text Text) m
+     , MonadState ReducerState m
      )
   => NExprLocF (m NExprLoc)
   -> m NExprLoc

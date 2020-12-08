@@ -25,9 +25,9 @@ import           Nix.Exec                       ( MonadNix
                                                 , evalExprLoc
                                                 , nixInstantiateExpr
                                                 )
-import           Nix.Expr
 import           Nix.Frames
 import           Nix.Parser
+import           Nix.Reduce                     ( pathToDefaultNixFile, ReducerState(..) )
 import           Nix.Render
 import           Nix.Scope
 import           Nix.String
@@ -225,13 +225,13 @@ findPathM = findPathBy existingPath
     pure $ if exists then Just apath else Nothing
 
 defaultImportPath
-  :: (MonadNix e t f m, MonadState (HashMap FilePath NExprLoc, b) m)
+  :: (MonadNix e t f m, MonadState ReducerState m)
   => FilePath
   -> m (NValue t f m)
 defaultImportPath path = do
   traceM $ "Importing file " ++ path
   withFrame Info (ErrorCall $ "While importing file " ++ show path) $ do
-    imports <- gets fst
+    imports <- gets exprs
     evalExprLoc =<< case M.lookup path imports of
       Just expr -> pure expr
       Nothing   -> do
@@ -242,17 +242,11 @@ defaultImportPath path = do
               $ ErrorCall
               . show $ fillSep ["Parse during import failed:", err]
           Success expr -> do
-            modify (\(a, b) -> (M.insert path expr a, b))
+            modify (\rs -> rs {exprs = M.insert path expr (exprs rs)})
             pure expr
 
 defaultPathToDefaultNix :: MonadNix e t f m => FilePath -> m FilePath
 defaultPathToDefaultNix = pathToDefaultNixFile
-
--- Given a path, determine the nix file to load
-pathToDefaultNixFile :: MonadFile m => FilePath -> m FilePath
-pathToDefaultNixFile p = do
-  isDir <- doesDirectoryExist p
-  pure $ if isDir then p </> "default.nix" else p
 
 defaultTraceEffect :: MonadPutStr m => String -> m ()
 defaultTraceEffect = Nix.Effects.putStrLn

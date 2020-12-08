@@ -37,6 +37,7 @@ import           Nix.Effects
 import           Nix.Exec                       ( MonadNix , callFunc)
 import           Nix.Frames
 import           Nix.Json                       ( nvalueToJSONNixString )
+import           Nix.Reduce
 import           Nix.Render
 import           Nix.String
 import           Nix.String.Coerce
@@ -102,7 +103,7 @@ writeDerivation (drv@Derivation {inputs, name}) = do
 
 -- | Traverse the graph of inputDrvs to replace fixed output derivations with their fixed output hash.
 -- this avoids propagating changes to their .drv when the output hash stays the same.
-hashDerivationModulo :: (MonadNix e t f m, MonadState (b, MS.HashMap Text Text) m) => Derivation -> m (Store.Digest 'Store.SHA256)
+hashDerivationModulo :: (MonadNix e t f m, MonadState ReducerState m) => Derivation -> m (Store.Digest 'Store.SHA256)
 hashDerivationModulo (Derivation {
     mFixed = Just (Store.SomeDigest (digest :: Store.Digest hashType)),
     outputs,
@@ -116,7 +117,7 @@ hashDerivationModulo (Derivation {
       <> ":" <> path
     outputsList -> throwError $ ErrorCall $ "This is weird. A fixed output drv should only have one output named 'out'. Got " ++ show outputsList
 hashDerivationModulo drv@(Derivation {inputs = (inputSrcs, inputDrvs)}) = do
-  cache <- gets snd
+  cache <- gets drvHashes
   inputsModulo <- Map.fromList <$> forM (Map.toList inputDrvs) (\(path, outs) ->
     case MS.lookup path cache of
       Just hash -> return (hash, outs)
@@ -226,7 +227,7 @@ derivationParser = do
     _ -> (Nothing, Flat)
 
 
-defaultDerivationStrict :: forall e t f m b. (MonadNix e t f m, MonadState (b, MS.HashMap Text Text) m) => NValue t f m -> m (NValue t f m)
+defaultDerivationStrict :: forall e t f m b. (MonadNix e t f m, MonadState ReducerState m) => NValue t f m -> m (NValue t f m)
 defaultDerivationStrict = fromValue @(AttrSet (NValue t f m)) >=> \s -> do
     (drv, ctx) <- runWithStringContextT' $ buildDerivationWithContext s
     drvName <- makeStorePathName $ name drv
@@ -258,7 +259,7 @@ defaultDerivationStrict = fromValue @(AttrSet (NValue t f m)) >=> \s -> do
 
     -- Memoize here, as it may be our last chance in case of readonly stores.
     drvHash <- Store.encodeBase16 <$> hashDerivationModulo drv'
-    modify (\(a, b) -> (a, MS.insert drvPath drvHash b))
+    modify (\rs -> rs {drvHashes = MS.insert drvPath drvHash (drvHashes rs)})
 
     let outputsWithContext = Map.mapWithKey (\out path -> principledMakeNixStringWithSingletonContext path (StringContext drvPath (DerivationOutput out))) (outputs drv')
         drvPathWithContext = principledMakeNixStringWithSingletonContext drvPath (StringContext drvPath AllOutputs)

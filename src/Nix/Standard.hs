@@ -44,6 +44,7 @@ import           Nix.Expr.Types.Annotated
 import           Nix.Fresh
 import           Nix.Fresh.Basic
 import           Nix.Options
+import           Nix.Reduce                     ( ReducerState )
 import           Nix.Render
 import           Nix.Scope
 import           Nix.Thunk
@@ -141,7 +142,7 @@ instance ( MonadFix m
          , Typeable m
          , Scoped (StdValue m) m
          , MonadReader (Context m (StdValue m)) m
-         , MonadState (HashMap FilePath NExprLoc, Data.HashMap.Strict.HashMap Text Text) m
+         , MonadState ReducerState m
          , MonadDataErrorContext (StdThunk m) (StdCited m) m
          , MonadThunk (StdThunk m) m (StdValue m)
          , MonadValue (StdValue m) m
@@ -208,7 +209,7 @@ newtype StandardTF r m a
     , MonadThrow
     , MonadMask
     , MonadReader (Context r (StdValue r))
-    , MonadState (HashMap FilePath NExprLoc, HashMap Text Text)
+    , MonadState ReducerState
     )
 
 instance MonadTrans (StandardTF r) where
