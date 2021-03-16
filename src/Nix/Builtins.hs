@@ -888,7 +888,7 @@ catAttrs attrName xs =
 
     nvList . catMaybes <$>
       traverse
-        (fmap (M.lookup n) . fromValue <=< demand)
+        (fmap (M.lookup n) . fromValue )
         l
 
 baseNameOf :: MonadNix e t f m => NValue t f m -> m (NValue t f m)
@@ -1053,7 +1053,7 @@ genericClosure = fromValue @(AttrSet (NValue t f m)) >=> \s ->
     (Just _     , Nothing        ) -> throwError $ ErrorCall "builtins.genericClosure: Attribute 'operator' required"
     (Just startSet, Just operator) ->
       do
-        ss <- fromValue @[NValue t f m] =<< demand startSet
+        ss <- fromValue @[NValue t f m] startSet
         op <- demand operator
 
         toValue @[NValue t f m] =<< snd <$> go op S.empty ss
