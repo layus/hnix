@@ -1614,7 +1614,9 @@ fromJSON nvjson =
     A.Null     -> pure $ nvConstant NNull
 
 prim_toJSON :: MonadNix e t f m => NValue t f m -> m (NValue t f m)
-prim_toJSON = (fmap nvStr . nvalueToJSONNixString) <=< demand
+prim_toJSON nv = do
+  opts :: Options <- asks (view hasLens)
+  nvStr <$> nvalueToJSONNixString (strict opts) nv
 
 toXML_ :: MonadNix e t f m => NValue t f m -> m (NValue t f m)
 toXML_ = (fmap (nvStr . toXML) . normalForm) <=< demand

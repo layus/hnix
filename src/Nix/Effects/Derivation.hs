@@ -328,7 +328,7 @@ buildDerivationWithContext drvAttrs = do
 
       env <- if useJson
         then do
-          jsonString :: NixString <- lift $ nvalueToJSONNixString $ nvSet mempty $
+          jsonString :: NixString <- lift $ nvalueToJSONNixString True $ nvSet mempty $
             deleteKeys [ "args", "__ignoreNulls", "__structuredAttrs" ] attrs
           rawString :: Text <- extractNixString jsonString
           pure $ Map.singleton "__json" rawString
